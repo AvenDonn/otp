@@ -1412,26 +1412,52 @@ posix_errno_t efile_make_dir(const efile_path_t *path) {
 posix_errno_t efile_del_file(const efile_path_t *path) {
     ASSERT_PATH_FORMAT(path);
 
-    if(!DeleteFileW((WCHAR*)path->data)) {
-        DWORD last_error = GetLastError();
+    /* Provide POSIX-semantics to the delete - need to call SetFileInformationByHandle, can't use simple DeleteFileW */
+    HANDLE deleteHandle;
+    DWORD last_error;
 
-        switch(last_error) {
-        case ERROR_INVALID_NAME:
-            /* Attempted to delete a device or similar. */
-            return EACCES;
-        case ERROR_ACCESS_DENIED:
-            /* Windows NT reports removing a directory as EACCES instead of
-             * EPERM. */
-            if(has_file_attributes(path, FILE_ATTRIBUTE_DIRECTORY)) {
-                return EPERM;
-            }
-            break;
-        }
+    deleteHandle = CreateFileW((WCHAR*)path->data, DELETE,
+        FILE_SHARE_FLAGS, NULL, OPEN_EXISTING,
+        FILE_FLAG_DELETE_ON_CLOSE, NULL);
 
+    if (deleteHandle == INVALID_HANDLE_VALUE) {
+        last_error = GetLastError();
+        return efile_del_windows_to_posix_errno(path, last_error);
+    }
+
+    FILE_DISPOSITION_INFO_EX disposition_info;
+    disposition_info.Flags = FILE_DISPOSITION_FLAG_POSIX_SEMANTICS;
+
+    if (!SetFileInformationByHandle(deleteHandle, FileDispositionInfoEx, &disposition_info, sizeof(disposition_info))) {
+        last_error = GetLastError();
+        CloseHandle(deleteHandle); /* Might also fail, generally shouldn't. But the error that should be returned is from the SetFileInformationByHandle operation. */
         return windows_to_posix_errno(last_error);
     }
 
+    /* Closing the handle deletes the file */
+    if (!CloseHandle(deleteHandle)) {
+        last_error = GetLastError();
+        return efile_del_windows_to_posix_errno(path, last_error);
+    }
+
     return 0;
+}
+
+static int efile_del_windows_to_posix_errno(const efile_path_t *path, DWORD last_error) {
+    switch(last_error) {
+    case ERROR_INVALID_NAME:
+        /* Attempted to delete a device or similar. */
+        return EACCES;
+    case ERROR_ACCESS_DENIED:
+        /* Windows NT reports removing a directory as EACCES instead of
+         * EPERM. */
+        if(has_file_attributes(path, FILE_ATTRIBUTE_DIRECTORY)) {
+            return EPERM;
+        }
+        break;
+    }
+
+    return windows_to_posix_errno(last_error);
 }
 
 posix_errno_t efile_del_dir(const efile_path_t *path) {
