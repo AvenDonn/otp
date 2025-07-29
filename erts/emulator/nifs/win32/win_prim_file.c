@@ -1430,8 +1430,11 @@ posix_errno_t efile_del_file(const efile_path_t *path) {
 
     if (!SetFileInformationByHandle(deleteHandle, FileDispositionInfoEx, &disposition_info, sizeof(disposition_info))) {
         last_error = GetLastError();
-        CloseHandle(deleteHandle); /* Might also fail, generally shouldn't. But the error that should be returned is from the SetFileInformationByHandle operation. */
-        return windows_to_posix_errno(last_error);
+        /* POSIX semantics set information is only supported in Windows 10/Server 2019 and later. In earlier versions, it will fail with ERROR_INVALID_PARAMETER */
+        if (last_error != ERROR_INVALID_PARAMETER) {
+            CloseHandle(deleteHandle); /* Might also fail, generally shouldn't. But the error that should be returned is from the SetFileInformationByHandle operation. */
+            return windows_to_posix_errno(last_error);
+        }
     }
 
     /* Closing the handle deletes the file */
